@@ -1,4 +1,6 @@
-# MuleCheck: Daily Mule & Scam Account Exposure
+# MuleCheck
+
+**Live site: [mulecheck.tech](https://mulecheck.tech)**
 
 Public board that exposes mule bank accounts, scam UPI IDs, fraud phone numbers, phishing sites, fake apps and crypto wallets, published daily after moderator review.
 
