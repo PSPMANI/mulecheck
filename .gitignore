@@ -42,3 +42,8 @@ next-env.d.ts
 prisma/dev.db
 prisma/dev.db-journal
 data/uploads/
+
+# Local assistant config
+CLAUDE.md
+AGENTS.md
+.claude/
