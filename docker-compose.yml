@@ -1,0 +1,9 @@
+services:
+  mulewatch:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3018:3018"
+    env_file: .env
+    volumes:
+      - ./data:/app/data

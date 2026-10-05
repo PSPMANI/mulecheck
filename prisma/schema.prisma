@@ -1,0 +1,308 @@
+// Mule & Scam Account Exposure — data model
+// Local dev: SQLite. For Vercel/production switch provider to "postgresql" and set DATABASE_URL.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// One reported identifier (phone, UPI, bank account, crypto wallet, website, email, social handle)
+model Account {
+  id             String   @id @default(cuid())
+  type           String   // PHONE | UPI | BANK | IFSC | CRYPTO | WEBSITE | EMAIL | SOCIAL | APP
+  value          String   // normalized identifier as stored
+  valueHash      String   // sha256(normalized) — used for public exact-match lookups
+  bankName       String?
+  holderName     String?  // alleged name on account / display name
+  platform       String?  // e.g. Telegram, WhatsApp, Instagram, Binance, PhonePe
+  scamType       String   // see SCAM_TYPES in src/lib/scamTypes.ts
+  role           String   @default("MULE") // MULE | SCAMMER | PHISHING | FAKE_APP | FAKE_WEBSITE
+  summary        String   // short public description of the scam pattern
+  totalAmountInr Int      @default(0)
+  reportCount    Int      @default(1)
+  firstReported  DateTime @default(now())
+  lastReported   DateTime @default(now())
+  status         String   @default("PENDING")  // PENDING | APPROVED | REJECTED
+  visibility     String   @default("MASKED")   // FULL | MASKED | HIDDEN  (admin decides per record)
+  exposedOn      DateTime? // date it was published (drives the daily exposure page)
+  source         String   @default("COMMUNITY") // COMMUNITY | SEED | ADMIN
+  tags           String   @default("")          // comma separated
+  adminNotes     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  reports        Report[]
+  comments       Comment[]
+  reactions      Reaction[]
+
+  @@unique([type, valueHash])
+  @@index([status, exposedOn])
+  @@index([scamType])
+}
+
+// Individual community submissions tied to an Account
+model Report {
+  id            String   @id @default(cuid())
+  accountId     String
+  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  scamType      String
+  scamName      String?   // name of the scam / fraud as given by the reporter
+  description   String
+  amountInr     Int      @default(0)
+  evidenceUrl   String?   // external link to evidence (drive, etc.)
+  websiteUrl    String?   // scam website / app link / group invite link
+  incidentDate  DateTime? // date AND time of the incident
+  transactionRef String?  // UTR / UPI ref / txn hash
+  paymentMethod String?   // UPI, IMPS, NEFT, card, crypto, cash deposit
+  victimBank    String?   // bank the money left from
+  reporterName  String?   // optional, never shown publicly
+  reporterEmail String?   // optional, never shown publicly
+  reporterPhone String?   // optional, never shown publicly
+  reporterCity  String?
+  ipHash        String?
+  userAgent     String?
+  status        String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  createdAt     DateTime @default(now())
+  evidence      Evidence[]
+  identifiers   ReportIdentifier[]
+
+  @@index([status, createdAt])
+}
+
+model AdminSession {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String?
+  user      AdminUser? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+// "Ask before you pay": a user sends details of a pending deal, admin reviews and replies with a verdict.
+model AdviceRequest {
+  id               String    @id @default(cuid())
+  token            String    @unique  // secret link for the requester to view the reply
+  category         String    @default("PAYMENT_ACCOUNT") // PAYMENT_ACCOUNT | EARNING_APP | INVESTMENT | JOB_OFFER | WEBSITE | PERSON | OTHER
+  subject          String?   // name of the platform / app / scheme / person being asked about
+  identifierType   String    @default("OTHER")
+  identifier       String    @default("")
+  identifierHash   String    @default("")
+  holderName       String?
+  bankName         String?
+  platform         String?
+  amountInr        Int       @default(0)
+  description      String
+  contactName      String?
+  contactEmail     String?
+  contactPhone     String?
+  websiteUrl       String?
+  ipHash           String?
+  userAgent        String?
+  evidence         Evidence[]
+  matchedAccountId String?   // auto-match against exposed accounts at submission time
+  status           String    @default("PENDING") // PENDING | ANSWERED
+  verdict          String?   // SAFE | SUSPICIOUS | SCAM | NEED_INFO
+  adminReply       String?
+  answeredAt       DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([status, createdAt])
+  @@index([identifierHash])
+}
+
+// Uploaded screenshots / documents. Stored on disk under data/uploads, served to moderators only.
+model Evidence {
+  id           String   @id @default(cuid())
+  reportId     String?
+  report       Report?  @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  adviceId     String?
+  advice       AdviceRequest? @relation(fields: [adviceId], references: [id], onDelete: Cascade)
+  kind         String   @default("SCREENSHOT") // SCREENSHOT | DOCUMENT
+  storedName   String   // file name inside data/uploads
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  sha256       String
+  createdAt    DateTime @default(now())
+
+  @@index([reportId])
+  @@index([adviceId])
+}
+
+// Public comments under an exposed account.
+model Comment {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  name      String
+  body      String
+  ipHash    String?
+  status    String   @default("VISIBLE") // VISIBLE | HIDDEN
+  createdAt DateTime @default(now())
+
+  @@index([accountId, status, createdAt])
+}
+
+// Emoji reactions under an exposed account (one per emoji per visitor).
+model Reaction {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  emoji     String
+  ipHash    String
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, emoji, ipHash])
+  @@index([accountId])
+}
+
+// Community board: anyone can post a problem (text + images only, no links) and others reply with a verdict.
+model CommunityPost {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  authorName  String
+  category    String   @default("OTHER") // mirrors advice categories
+  ipHash      String?
+  userAgent   String?
+  status      String   @default("VISIBLE") // VISIBLE | HIDDEN
+  pinned      Boolean  @default(false)
+  replyCount  Int      @default(0)
+  lastReplyAt DateTime?
+  createdAt   DateTime @default(now())
+  replies     CommunityReply[]
+  images      CommunityImage[]
+  reactions   PostReaction[]
+
+  @@index([status, pinned, lastReplyAt])
+  @@index([createdAt])
+}
+
+model CommunityReply {
+  id         String   @id @default(cuid())
+  postId     String
+  post       CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  body       String
+  authorName String
+  verdict    String?  // SCAM | SUSPICIOUS | SAFE | NOT_SURE
+  isModerator Boolean @default(false)
+  ipHash     String?
+  status     String   @default("VISIBLE")
+  createdAt  DateTime @default(now())
+  images     CommunityImage[]
+
+  @@index([postId, status, createdAt])
+}
+
+model CommunityImage {
+  id           String   @id @default(cuid())
+  postId       String
+  post         CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  replyId      String?
+  reply        CommunityReply? @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  storedName   String
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  sha256       String
+  createdAt    DateTime @default(now())
+
+  @@index([postId])
+  @@index([replyId])
+}
+
+// Users flag a post / reply / comment as bot, fake or abusive. Reviewed by admin.
+model Flag {
+  id         String   @id @default(cuid())
+  targetType String   // POST | REPLY | COMMENT | CHAT
+  targetId   String
+  reason     String
+  details    String?
+  ipHash     String?
+  status     String   @default("OPEN") // OPEN | RESOLVED | DISMISSED
+  createdAt  DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+}
+
+// Heartbeat so users can see when a moderator is online.
+model Presence {
+  id        String   @id // "admin"
+  lastSeen  DateTime
+}
+
+// Failed / successful admin logins, used for lockout.
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  ipHash    String
+  username  String?
+  success   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([ipHash, createdAt])
+}
+
+// Append-only audit trail of moderator actions.
+model AdminLog {
+  id        String   @id @default(cuid())
+  actor     String?
+  action    String
+  targetId  String?
+  details   String?
+  ipHash    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// One-click emoji reactions on community posts (one per emoji per visitor).
+model PostReaction {
+  id        String   @id @default(cuid())
+  postId    String
+  post      CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  emoji     String
+  ipHash    String
+  createdAt DateTime @default(now())
+
+  @@unique([postId, emoji, ipHash])
+  @@index([postId])
+}
+
+// Admin switches (community pause, forms on/off, announcement).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Moderator / owner accounts. Passwords stored as bcrypt hashes.
+model AdminUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  displayName  String
+  passwordHash String
+  role         String   @default("MODERATOR") // OWNER | MODERATOR
+  active       Boolean  @default(true)
+  mustChangePw Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  lastLoginAt  DateTime?
+  sessions     AdminSession[]
+}
+
+// Every UPI / account / link / contact / group named in one report. Each is linked to an Account row on the board.
+model ReportIdentifier {
+  id        String   @id @default(cuid())
+  reportId  String
+  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  kind      String   // UPI | BANK | WEBSITE | APP | SOCIAL | PHONE | PHONE_MOBILE | GROUP
+  type      String   // Account.type
+  value     String
+  valueHash String
+  accountId String?
+
+  @@index([reportId])
+  @@index([valueHash])
+}
